@@ -17,7 +17,7 @@ import matplotlib.pyplot as plt
 # current working dir
 cwd = os.getcwd()
 # repo to clone
-CODE_ROOT_FOLDER="/content/zeeguu-api/"
+CODE_ROOT_FOLDER="/content/zeeguu-api/api/"
 
 # -- helper functions --
 
@@ -54,7 +54,7 @@ def imports_from_file(file):
 
     all_imports = []
 
-    lines = [line for line in open(file)]
+    lines = [line for line in open(cwd+file)]
 
     for line in lines:
         imp = import_from_line(line)
@@ -71,14 +71,14 @@ def dependencies_graph(code_root_folder):
     G = nx.Graph()
 
     for file in files:
-        file_path = str(file)
+        _file_path = str(file)
 
-        module_name = module_name_from_file_path(file_path)
+        module_name = module_name_from_file_path(_file_path)
 
         if module_name not in G.nodes:
             G.add_node(module_name)
 
-        for each in imports_from_file(file_path):
+        for each in imports_from_file(_file_path):
             G.add_edge(module_name, each)
     return G
 
@@ -86,22 +86,21 @@ def dependencies_graph(code_root_folder):
 def draw_graph(G, size, **args):
     plt.figure(figsize=size)
     nx.draw_kamada_kawai(G, **args)
-    plt.show()
+    #plt.show()
+    plt.savefig("figure.png")
 
 
 def main():
-    print(sys.version)
+    # print(sys.version)
 
     # !{sys.executable} -m pip install gitpython/pyvis
-    #pip.main(['install', '-r', 'requirements.txt'])
+    # pip.main(['install', '-r', 'requirements.txt'])
 
-    print(cwd)
+    # print(cwd)
+    # print(file_path("zeeguu/core/model/user.py"))
 
-    # clone repo
-    if not os.path.exists(CODE_ROOT_FOLDER):
-        Repo.clone_from("https://github.com/zeeguu/api", CODE_ROOT_FOLDER)
-
-    assert (file_path("zeeguu/core/model/user.py") == "/content/zeeguu-api/zeeguu/core/model/user.py")
+    # Had to insert api/ between zeeguu-api/ and zeeguu/
+    assert (file_path("zeeguu/core/model/user.py") == "/content/zeeguu-api/api/zeeguu/core/model/user.py")
     assert 'zeeguu.core.model.user' == module_name_from_file_path(file_path('zeeguu/core/model/user.py'))
 
     imports_from_file(file_path('zeeguu/core/model/user.py'))
