@@ -1,2 +1,3 @@
 # architectural-recovery
 ITU Course: Software Architecture, Spring 2026
+This is the repository used by MSc Computer Science student [@thor2818]([url](https://github.com/thor2818)) and secretary [@zntheory]([url](https://github.com/zntheory)) ...
