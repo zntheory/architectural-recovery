@@ -16,14 +16,19 @@ import matplotlib.pyplot as plt
 
 # current working dir
 cwd = os.getcwd()
-# repo to clone
-CODE_ROOT_FOLDER="/content/zeeguu-api/api/"
+print ("Current working dir: " + cwd)
+CODE_ROOT_FOLDER = cwd + "/api/"
+print ("Code root folder: " + CODE_ROOT_FOLDER)
+
 
 # -- helper functions --
 
+# helper function to get a file path w/o having to always provide the /content/zeeguu-api/ prefix
 def file_path(file_name):
     return CODE_ROOT_FOLDER+file_name
 
+
+# extracting a module name from a file name
 def module_name_from_file_path(full_path):
     file_name = full_path[len(CODE_ROOT_FOLDER):]
     file_name = file_name.replace("/__init__.py","")
@@ -41,9 +46,9 @@ def import_from_line(line):
     #   +  - at least one occurrence of previous
     #  ( ) - capture group (read more at: https://pynative.com/python-regex-capturing-groups/)
     try:
-        y = re.search("^from (\S+)", line)
+        y = re.search(r"^from (\S+)", line)
         if not y:
-            y = re.search("^import (\S+)", line)
+            y = re.search(r"^import (\S+)", line)
         return y.group(1)
     except:
         return None
@@ -54,7 +59,7 @@ def imports_from_file(file):
 
     all_imports = []
 
-    lines = [line for line in open(cwd+file)]
+    lines = [line for line in open(file)]
 
     for line in lines:
         imp = import_from_line(line)
@@ -100,14 +105,16 @@ def main():
     # print(file_path("zeeguu/core/model/user.py"))
 
     # Had to insert api/ between zeeguu-api/ and zeeguu/
-    assert (file_path("zeeguu/core/model/user.py") == "/content/zeeguu-api/api/zeeguu/core/model/user.py")
+    #print(cwd +"/api/zeeguu/core/model/user.py")
+    #print (file_path("zeeguu/core/model/user.py"))
+    assert (file_path("zeeguu/core/model/user.py") == cwd + "/api/" + "zeeguu/core/model/user.py")
     assert 'zeeguu.core.model.user' == module_name_from_file_path(file_path('zeeguu/core/model/user.py'))
 
-    imports_from_file(file_path('zeeguu/core/model/user.py'))
+    imports_from_file(file_path('/zeeguu/core/model/user.py'))
 
     # test
-    print(imports_from_file(file_path('zeeguu/core/model/bookmark.py')))
-    print(imports_from_file(file_path('zeeguu/core/model/unique_code.py')))
+    #print(imports_from_file(file_path('zeeguu/core/model/bookmark.py')))
+    #print(imports_from_file(file_path('zeeguu/core/model/unique_code.py')))
 
     # run it
     G = dependencies_graph(CODE_ROOT_FOLDER)
