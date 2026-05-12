@@ -1,7 +1,6 @@
 import os
 import sys
 import pip
-from exceptiongroup import catch
 from git import Repo
 import re
 import pathlib
@@ -103,14 +102,27 @@ def dependencies_graph(code_root_folder):
             G.add_node(module_name)
 
         for each in imports_from_file(_file_path):
-            G.add_edge(module_name, each)
+            G.add_edge(module_name, each, weight = 5)
     return G
 
 # Draw network graph
 def draw_graph(G, size, **args):
     plt.figure(figsize=size)
-    nx.draw_kamada_kawai(G, **args)
-    #plt.show()
+
+    pos = nx.kamada_kawai_layout(G)
+
+    # draw nodes + edges
+    nx.draw(G, pos, **args)
+
+    # edge labels
+    edge_labels = nx.get_edge_attributes(G, 'weight')
+
+    nx.draw_networkx_edge_labels(
+        G,
+        pos,
+        edge_labels=edge_labels
+    )
+
     plt.savefig("figure.png")
 
 def relevant_module(module_name):
@@ -135,14 +147,16 @@ def dependencies_digraph(code_root_folder):
 
     G = nx.DiGraph()
 
+    # total imports in entire project
+    total_imports = 0
+
     for file in files:
         file_path = str(file)
-        print("File path: " + file_path)
 
         source_module = module_name_from_file_path(file_path)
-        print("Source module: " + source_module)
+
         if not relevant_module(source_module):
-          continue
+            continue
 
         if source_module not in G.nodes:
             G.add_node(source_module)
@@ -153,18 +167,39 @@ def dependencies_digraph(code_root_folder):
             tree = get_source_tree_from_file(file_path)
         except:
             use_tree = False
-        finally:
-            if use_tree:
-                for target_module in imports_from_file(tree):
-                    if target_module is not None: print("Target module: " + target_module)
-                    if relevant_module(target_module):
-                        G.add_edge(source_module, target_module)
-            else:
-                for target_module in imports_from_file_regex(file_path):
-                    if target_module is not None: print("Target module: " + target_module)
-                    if relevant_module(target_module):
-                        G.add_edge(source_module, target_module)
 
+        imports = []
+
+        if use_tree:
+            imports = imports_from_file(tree)
+        else:
+            imports = imports_from_file_regex(file_path)
+
+        for target_module in imports:
+
+            if not relevant_module(target_module):
+                continue
+
+            # increment total imports
+            total_imports += 1
+
+            # increment edge weight
+            if G.has_edge(source_module, target_module):
+                G[source_module][target_module]['weight'] += 1
+            else:
+                G.add_edge(source_module, target_module, weight=1)
+
+    print("Total imports:", total_imports)
+
+    # verify graph weights match total imports
+    total_edge_weight = sum(
+        data['weight']
+        for _, _, data in G.edges(data=True)
+    )
+
+    print("Total edge weight:", total_edge_weight)
+
+    assert total_imports == total_edge_weight
 
     return G
 
@@ -174,12 +209,21 @@ def top_level_package(module_name, depth=1):
 
 def abstracted_to_top_level(G, depth=1):
     aG = nx.DiGraph()
-    for each in G.edges():
-        src = top_level_package(each[0], depth)
-        dst = top_level_package(each[1], depth)
 
-        if src != dst:
-          aG.add_edge(src, dst)
+    for src, dst, data in G.edges(data=True):
+
+        src_top = top_level_package(src, depth)
+        dst_top = top_level_package(dst, depth)
+
+        if src_top == dst_top:
+            continue
+
+        weight = data.get("weight", 1)
+
+        if aG.has_edge(src_top, dst_top):
+            aG[src_top][dst_top]['weight'] += weight
+        else:
+            aG.add_edge(src_top, dst_top, weight=weight)
 
     return aG
 
@@ -206,9 +250,9 @@ def main():
     # run it
 
     DG = dependencies_digraph(CODE_ROOT_FOLDER)
-    ADG = abstracted_to_top_level(DG, 3)
-    print(ADG.number_of_nodes())
-    #draw_graph(ADG, (10, 10), with_labels=True)
+    ADG = abstracted_to_top_level(DG, 2)
+    print(f"Number of nodes: {ADG.number_of_nodes()}")
+    draw_graph(ADG, (10, 10), with_labels=True)
 
     assert (top_level_package("zeeguu.core.model.util", 1) == "zeeguu")
     assert (top_level_package("zeeguu.core.model.util", 2) == "zeeguu.core")
