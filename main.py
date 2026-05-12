@@ -1,12 +1,14 @@
 import os
 import sys
 import pip
+from exceptiongroup import catch
 from git import Repo
 import re
 import pathlib
 from pathlib import Path
 import networkx as nx
 import matplotlib.pyplot as plt
+import ast
 
 
 # Inspo credit
@@ -55,7 +57,7 @@ def import_from_line(line):
 
 # Extract a file's modules
 # Extraction ex: zeeguu_core.model.bookmark
-def imports_from_file(file):
+def imports_from_file_regex(file):
 
     all_imports = []
 
@@ -67,6 +69,23 @@ def imports_from_file(file):
         if imp:
             all_imports.append(imp)
 
+    return all_imports
+
+def get_source_tree_from_file(_file_path):
+    source = open(_file_path).read()
+    tree = ast.parse(source)
+    return tree
+
+def imports_from_file(tree):
+
+    all_imports = []
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                all_imports.append(alias.name)
+        elif isinstance(node, ast.ImportFrom):
+            all_imports.append(node.module)
     return all_imports
 
 # Extract files' dependencies
@@ -94,6 +113,75 @@ def draw_graph(G, size, **args):
     #plt.show()
     plt.savefig("figure.png")
 
+def relevant_module(module_name):
+
+    # Due to `from . import api, db_session` in api/zeegu/api/endpoints/reading_sessions.py
+    # I decided to simply evaluate these types of imports as irrelevant.
+    # This generally happens when `from .` is used, which was mostly used in init-files.
+    # In these cases, it is okay to ignore them for our purposes.
+    if module_name is None:
+        return False
+
+    if "test" in module_name:
+        return False
+
+    if module_name.startswith("zeeguu"):
+        return True
+
+    return False
+
+def dependencies_digraph(code_root_folder):
+    files = Path(code_root_folder).rglob("*.py")
+
+    G = nx.DiGraph()
+
+    for file in files:
+        file_path = str(file)
+        print("File path: " + file_path)
+
+        source_module = module_name_from_file_path(file_path)
+        print("Source module: " + source_module)
+        if not relevant_module(source_module):
+          continue
+
+        if source_module not in G.nodes:
+            G.add_node(source_module)
+
+        use_tree = True
+
+        try:
+            tree = get_source_tree_from_file(file_path)
+        except:
+            use_tree = False
+        finally:
+            if use_tree:
+                for target_module in imports_from_file(tree):
+                    if target_module is not None: print("Target module: " + target_module)
+                    if relevant_module(target_module):
+                        G.add_edge(source_module, target_module)
+            else:
+                for target_module in imports_from_file_regex(file_path):
+                    if target_module is not None: print("Target module: " + target_module)
+                    if relevant_module(target_module):
+                        G.add_edge(source_module, target_module)
+
+
+    return G
+
+def top_level_package(module_name, depth=1):
+    components = module_name.split(".")
+    return ".".join(components[:depth])
+
+def abstracted_to_top_level(G, depth=1):
+    aG = nx.DiGraph()
+    for each in G.edges():
+        src = top_level_package(each[0], depth)
+        dst = top_level_package(each[1], depth)
+
+        if src != dst:
+          aG.add_edge(src, dst)
+
+    return aG
 
 def main():
     # print(sys.version)
@@ -110,14 +198,19 @@ def main():
     assert (file_path("zeeguu/core/model/user.py") == cwd + "/api/" + "zeeguu/core/model/user.py")
     assert 'zeeguu.core.model.user' == module_name_from_file_path(file_path('zeeguu/core/model/user.py'))
 
-    imports_from_file(file_path('/zeeguu/core/model/user.py'))
-
     # test
+    #imports_from_file(file_path('/zeeguu/core/model/user.py'))
     #print(imports_from_file(file_path('zeeguu/core/model/bookmark.py')))
     #print(imports_from_file(file_path('zeeguu/core/model/unique_code.py')))
 
     # run it
-    G = dependencies_graph(CODE_ROOT_FOLDER)
-    draw_graph(G, (40, 40), with_labels=False)
+
+    DG = dependencies_digraph(CODE_ROOT_FOLDER)
+    ADG = abstracted_to_top_level(DG, 3)
+    print(ADG.number_of_nodes())
+    #draw_graph(ADG, (10, 10), with_labels=True)
+
+    assert (top_level_package("zeeguu.core.model.util", 1) == "zeeguu")
+    assert (top_level_package("zeeguu.core.model.util", 2) == "zeeguu.core")
 
 main()
