@@ -1,15 +1,12 @@
-import os
-import sys
-import pip
-from exceptiongroup import catch
-from git import Repo
-import re
-import pathlib
-from pathlib import Path
-import networkx as nx
-import matplotlib.pyplot as plt
 import ast
+import os
+import random
+import re
+import sys
+from pathlib import Path
 
+import matplotlib.pyplot as plt
+import networkx as nx
 
 # Inspo credit
 # https://colab.research.google.com/drive/1ohvPB_SZeDa5NblzxLAkwmTY8JZRBZe_?usp=sharing#scrollTo=Ssb7D6FsoD6F
@@ -107,11 +104,59 @@ def dependencies_graph(code_root_folder):
     return G
 
 # Draw network graph
-def draw_graph(G, size, **args):
+def draw_graph(G, size):
+
     plt.figure(figsize=size)
-    nx.draw_kamada_kawai(G, **args)
-    #plt.show()
-    plt.savefig("figure.png")
+
+    pos = nx.spring_layout(
+        G,
+        k=2.5,
+        iterations=100,
+        seed=42
+    )
+
+    nx.draw_networkx_nodes(
+        G,
+        pos,
+        node_size=2500
+    )
+
+    nx.draw_networkx_labels(
+        G,
+        pos,
+        font_size=10
+    )
+
+    nx.draw_networkx_edges(
+        G,
+        pos,
+        arrows=True,
+        # connectionstyle="arc3,rad=0.15"
+    )
+
+    # Edge labels
+    edge_labels = nx.get_edge_attributes(G, "weight")
+
+    nx.draw_networkx_edge_labels(
+        G,
+        pos,
+        edge_labels=edge_labels,
+        font_size=20,
+        bbox=dict(
+            facecolor="white",
+            edgecolor="none",
+            alpha=0.9
+        ),
+        rotate=False
+    )
+
+    plt.axis("off")
+
+    plt.savefig(
+        "figure.png",
+        bbox_inches="tight",
+        dpi=300
+    )
 
 def relevant_module(module_name):
 
@@ -119,6 +164,7 @@ def relevant_module(module_name):
     # I decided to simply evaluate these types of imports as irrelevant.
     # This generally happens when `from .` is used, which was mostly used in init-files.
     # In these cases, it is okay to ignore them for our purposes.
+
     if module_name is None:
         return False
 
@@ -137,10 +183,10 @@ def dependencies_digraph(code_root_folder):
 
     for file in files:
         file_path = str(file)
-        print("File path: " + file_path)
+        #print("File path: " + file_path)
 
         source_module = module_name_from_file_path(file_path)
-        print("Source module: " + source_module)
+        #print("Source module: " + source_module)
         if not relevant_module(source_module):
           continue
 
@@ -155,16 +201,22 @@ def dependencies_digraph(code_root_folder):
             use_tree = False
         finally:
             if use_tree:
-                for target_module in imports_from_file(tree):
-                    if target_module is not None: print("Target module: " + target_module)
-                    if relevant_module(target_module):
-                        G.add_edge(source_module, target_module)
+                targets = imports_from_file(tree)
             else:
-                for target_module in imports_from_file_regex(file_path):
-                    if target_module is not None: print("Target module: " + target_module)
-                    if relevant_module(target_module):
-                        G.add_edge(source_module, target_module)
+                targets = imports_from_file_regex(file_path)
 
+            for target_module in targets:
+
+                if relevant_module(target_module):
+
+                    if G.has_edge(source_module, target_module):
+                        G[source_module][target_module]["weight"] += 1
+                    else:
+                        G.add_edge(
+                            source_module,
+                            target_module,
+                            weight=1
+                        )
 
     return G
 
@@ -173,13 +225,28 @@ def top_level_package(module_name, depth=1):
     return ".".join(components[:depth])
 
 def abstracted_to_top_level(G, depth=1):
-    aG = nx.DiGraph()
-    for each in G.edges():
-        src = top_level_package(each[0], depth)
-        dst = top_level_package(each[1], depth)
 
-        if src != dst:
-          aG.add_edge(src, dst)
+    aG = nx.DiGraph()
+
+
+    for src, dst, data in G.edges(data=True):
+
+        src_top = top_level_package(src, depth)
+        dst_top = top_level_package(dst, depth)
+
+        if src_top == dst_top:
+            continue
+
+        weight = data.get("weight", 1)
+
+        if aG.has_edge(src_top, dst_top):
+            aG[src_top][dst_top]["weight"] += weight
+        else:
+            aG.add_edge(
+                src_top,
+                dst_top,
+                weight=weight
+            )
 
     return aG
 
@@ -204,11 +271,13 @@ def main():
     #print(imports_from_file(file_path('zeeguu/core/model/unique_code.py')))
 
     # run it
-
     DG = dependencies_digraph(CODE_ROOT_FOLDER)
     ADG = abstracted_to_top_level(DG, 3)
-    print(ADG.number_of_nodes())
-    #draw_graph(ADG, (10, 10), with_labels=True)
+    #print("No. of edges: " + str(ADG.number_of_edges()))
+    #print("No. of out degrees: " + str(ADG.out_degree()))
+    #print("No. of out edges: " + str(ADG.out_edges()))
+    #print(ADG.number_of_nodes())
+    draw_graph(ADG, (40, 40))
 
     assert (top_level_package("zeeguu.core.model.util", 1) == "zeeguu")
     assert (top_level_package("zeeguu.core.model.util", 2) == "zeeguu.core")
