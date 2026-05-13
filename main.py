@@ -4,7 +4,9 @@ import random
 import re
 import sys
 from pathlib import Path
-
+from pydriller import Repository
+from pydriller import ModificationType
+from collections import defaultdict
 import matplotlib.pyplot as plt
 import networkx as nx
 
@@ -16,11 +18,26 @@ import networkx as nx
 # current working dir
 cwd = os.getcwd()
 print ("Current working dir: " + cwd)
-CODE_ROOT_FOLDER = cwd + "/api/"
+CODE_ROOT_FOLDER = cwd
 print ("Code root folder: " + CODE_ROOT_FOLDER)
-
+REPO_DIR = 'https://github.com/zeeguu/api'
+all_commits = list(Repository(REPO_DIR).traverse_commits())
 
 # -- helper functions --
+
+def print_out_commit_details(commits):
+  for commit in commits:
+      print(commit)
+      for each in commit.modified_files:
+          print(f"{commit.author.name} {each.change_type} {each.filename}\n -{each.old_path}\n -{each.new_path}")
+
+def module_name_from_rel_path(full_path):
+    # e.g. ../core/model/user.py -> zeeguu.core.model.user
+
+    file_name = full_path.replace("/__init__.py","")
+    file_name = file_name.replace("/",".")
+    file_name = file_name.replace(".py","")
+    return file_name
 
 # helper function to get a file path w/o having to always provide the /content/zeeguu-api/ prefix
 def file_path(file_name):
@@ -30,6 +47,7 @@ def file_path(file_name):
 # extracting a module name from a file name
 def module_name_from_file_path(full_path):
     file_name = full_path[len(CODE_ROOT_FOLDER):]
+    file_name = file_name.lstrip("/")                   # removes leading slash
     file_name = file_name.replace("/__init__.py","")
     file_name = file_name.replace("/",".")
     file_name = file_name.replace(".py","")
@@ -104,21 +122,30 @@ def dependencies_graph(code_root_folder):
     return G
 
 # Draw network graph
-def draw_graph(G, size):
+def draw_graph(G, size, commits):
 
     plt.figure(figsize=size)
 
+    #pos = nx.spring_layout(
+    #    G,
+    #    k=2.5,
+    #    iterations=100,
+    #    seed=42
+    #)
+
     pos = nx.spring_layout(
         G,
-        k=2.5,
-        iterations=100,
+        k=20,  # larger => more spacing
+        iterations=300,  # more settling
+        scale=20,  # expands final coordinates
         seed=42
     )
 
     nx.draw_networkx_nodes(
         G,
         pos,
-        node_size=2500
+        node_size=commits,
+        node_color='r',
     )
 
     nx.draw_networkx_labels(
@@ -141,7 +168,7 @@ def draw_graph(G, size):
         G,
         pos,
         edge_labels=edge_labels,
-        font_size=20,
+        font_size=10,
         bbox=dict(
             facecolor="white",
             edgecolor="none",
@@ -153,7 +180,7 @@ def draw_graph(G, size):
     plt.axis("off")
 
     plt.savefig(
-        "figure.png",
+        "../figure.png",
         bbox_inches="tight",
         dpi=300
     )
@@ -186,7 +213,7 @@ def dependencies_digraph(code_root_folder):
         #print("File path: " + file_path)
 
         source_module = module_name_from_file_path(file_path)
-        #print("Source module: " + source_module)
+        # print("Source module: " + source_module)
         if not relevant_module(source_module):
           continue
 
@@ -234,8 +261,10 @@ def abstracted_to_top_level(G, depth=1):
         src_top = top_level_package(src, depth)
         dst_top = top_level_package(dst, depth)
 
-        if src_top == dst_top:
-            continue
+        #if src_top == dst_top:
+        #    continue
+        for node in G.nodes():
+            aG.add_node(top_level_package(node, depth))
 
         weight = data.get("weight", 1)
 
@@ -262,24 +291,92 @@ def main():
     # Had to insert api/ between zeeguu-api/ and zeeguu/
     #print(cwd +"/api/zeeguu/core/model/user.py")
     #print (file_path("zeeguu/core/model/user.py"))
-    assert (file_path("zeeguu/core/model/user.py") == cwd + "/api/" + "zeeguu/core/model/user.py")
-    assert 'zeeguu.core.model.user' == module_name_from_file_path(file_path('zeeguu/core/model/user.py'))
+    #assert (file_path("zeeguu/core/model/user.py") == cwd + "/api/" + "zeeguu/core/model/user.py")
+    #assert 'zeeguu.core.model.user' == module_name_from_file_path(file_path('zeeguu/core/model/user.py'))
 
     # test
     #imports_from_file(file_path('/zeeguu/core/model/user.py'))
     #print(imports_from_file(file_path('zeeguu/core/model/bookmark.py')))
     #print(imports_from_file(file_path('zeeguu/core/model/unique_code.py')))
 
+    #print_out_commit_details(all_commits[0:1])
+
+#    commit_counts = defaultdict(int)
+
+#    for commit in all_commits:
+#        for each in commit.modified_files:
+#            try:
+#                commit_counts[each.new_path] += 1
+#            except:
+#                pass
+
+    commit_counts = {}
+
+    for commit in all_commits:
+        for modification in commit.modified_files:
+
+            new_path = modification.new_path
+            old_path = modification.old_path
+
+            try:
+
+                if modification.change_type == ModificationType.RENAME:
+                    commit_counts[new_path] = commit_counts.get(old_path, 0) + 1
+                    commit_counts.pop(old_path)
+
+                elif modification.change_type == ModificationType.DELETE:
+                    commit_counts.pop(old_path, '')
+
+                elif modification.change_type == ModificationType.ADD:
+                    commit_counts[new_path] = 1
+
+                else:  # modification to existing file
+                    commit_counts[old_path] += 1
+            except Exception as e:
+                print("something went wrong with: " + str(modification))
+                pass
+
+    sorted(commit_counts.items(), key=lambda x: x[1], reverse=True)
+
+    # sort by number of commits in decreasing order
+    # tester = sorted(commit_counts.items(), key=lambda x: x[1], reverse=True)[:42]
+    #print(tester)
+    # discussion: What is ("None", 103) ?
+
+    assert ("tools.migrations.teacher_dashboard_migration_1.upgrade" == module_name_from_rel_path(
+        "tools/migrations/teacher_dashboard_migration_1/upgrade.py"))
+    assert ("zeeguu.api") == module_name_from_rel_path("zeeguu/api/__init__.py")
+
+    package_activity = defaultdict(int)
+
+    for path, count in commit_counts.items():
+        if ".py" in str(path):
+            l2_module = top_level_package(module_name_from_rel_path(path), 2)
+            package_activity[l2_module] += count
+
+    sorted_sizes = sorted(package_activity.items(), key=lambda x: x[1], reverse=True)
+    #print(sorted_sizes)
+
     # run it
     DG = dependencies_digraph(CODE_ROOT_FOLDER)
-    ADG = abstracted_to_top_level(DG, 3)
+    ADG = abstracted_to_top_level(DG, 2)
     #print("No. of edges: " + str(ADG.number_of_edges()))
     #print("No. of out degrees: " + str(ADG.out_degree()))
     #print("No. of out edges: " + str(ADG.out_edges()))
     #print(ADG.number_of_nodes())
-    draw_graph(ADG, (40, 40))
 
-    assert (top_level_package("zeeguu.core.model.util", 1) == "zeeguu")
-    assert (top_level_package("zeeguu.core.model.util", 2) == "zeeguu.core")
+    print(list(ADG.nodes()))
+
+    sizes = [
+        package_activity.get(node, 1)
+        for node in ADG.nodes()
+    ]
+
+    print(sizes)
+
+    draw_graph(ADG, (20, 20), sizes)
+
+    #assert (top_level_package("zeeguu.core.model.util", 1) == "zeeguu")
+    #assert (top_level_package("zeeguu.core.model.util", 2) == "zeeguu.core")
 
 main()
