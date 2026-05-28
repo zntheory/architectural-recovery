@@ -7,8 +7,12 @@ from pathlib import Path
 from pydriller import Repository
 from pydriller import ModificationType
 from collections import defaultdict
-import matplotlib.pyplot as plt
+from pyvis.network import Network
 import networkx as nx
+import math
+from matplotlib import cm
+from matplotlib import colors
+from itertools import combinations
 
 # Inspo credit
 # https://colab.research.google.com/drive/1ohvPB_SZeDa5NblzxLAkwmTY8JZRBZe_?usp=sharing#scrollTo=Ssb7D6FsoD6F
@@ -32,12 +36,12 @@ def print_out_commit_details(commits):
           print(f"{commit.author.name} {each.change_type} {each.filename}\n -{each.old_path}\n -{each.new_path}")
 
 def module_name_from_rel_path(full_path):
-    # e.g. ../core/model/user.py -> zeeguu.core.model.user
 
     file_name = full_path.replace("/__init__.py","")
     file_name = file_name.replace("/",".")
     file_name = file_name.replace(".py","")
-    return file_name
+
+    return normalize_module_name(file_name)
 
 # helper function to get a file path w/o having to always provide the /content/zeeguu-api/ prefix
 def file_path(file_name):
@@ -53,6 +57,22 @@ def module_name_from_file_path(full_path):
     file_name = file_name.replace(".py","")
     return file_name
 
+def normalize_module_name(module_name):
+
+    if module_name is None:
+        return None
+
+    replacements = {
+        "zeeguu_core": "zeeguu.core",
+        "zeeguu_api": "zeeguu.api",
+        "zeeguu.api_dev": "zeeguu.api",
+        #"zeeguu_tokenizer": "zeeguu.tokenizer",
+    }
+
+    for old, new in replacements.items():
+        module_name = module_name.replace(old, new)
+
+    return module_name
 # Naive import extraction
 # TODO: Add full support for imports
 def import_from_line(line):
@@ -121,70 +141,182 @@ def dependencies_graph(code_root_folder):
             G.add_edge(module_name, each)
     return G
 
+def churn_color(churn, min_churn, max_churn):
+
+    # Logarithmic normalization
+    norm = colors.LogNorm(
+        vmin=max(min_churn, 1),
+        vmax=max_churn
+    )
+
+    # Reversed magma:
+    # low churn = light
+    # high churn = dark
+    cmap = cm.get_cmap("magma_r")
+
+    rgba = cmap(norm(churn))
+
+    return colors.to_hex(rgba)
+
+def color_for_legend(value, min_churn, max_churn):
+
+    norm = colors.LogNorm(
+        vmin=max(min_churn, 1),
+        vmax=max_churn
+    )
+
+    cmap = cm.get_cmap("magma_r")
+
+    return colors.to_hex(cmap(norm(value)))
+
 # Draw network graph
-def draw_graph(G, size, commits):
+def draw_graph_pyvis(G, package_activity, output_file="graph.html", directed=True):
 
-    plt.figure(figsize=size)
-
-    #pos = nx.spring_layout(
-    #    G,
-    #    k=2.5,
-    #    iterations=100,
-    #    seed=42
-    #)
-
-    pos = nx.spring_layout(
-        G,
-        k=20,  # larger => more spacing
-        iterations=300,  # more settling
-        scale=20,  # expands final coordinates
-        seed=42
+    net = Network(
+        height="900px",
+        width="100%",
+        directed=directed,
+        bgcolor="#f5f5f5",
+        font_color="#222222",
+        cdn_resources="in_line"
     )
 
-    nx.draw_networkx_nodes(
-        G,
-        pos,
-        node_size=commits,
-        node_color='r',
+    net.barnes_hut(
+        gravity=-30000,
+        central_gravity=0.2,
+        spring_length=250,
+        spring_strength=0.01,
+        damping=0.09
     )
 
-    nx.draw_networkx_labels(
-        G,
-        pos,
-        font_size=10
-    )
+    all_churn_values = list(package_activity.values())
 
-    nx.draw_networkx_edges(
-        G,
-        pos,
-        arrows=True,
-        # connectionstyle="arc3,rad=0.15"
-    )
+    min_churn = min(all_churn_values)
+    max_churn = max(all_churn_values)
+    
+    legend_values = [1, 10, 100, 1000, max_churn]
 
-    # Edge labels
-    edge_labels = nx.get_edge_attributes(G, "weight")
+    legend_colors = [
+        color_for_legend(v, min_churn, max_churn)
+        for v in legend_values
+    ]
 
-    nx.draw_networkx_edge_labels(
-        G,
-        pos,
-        edge_labels=edge_labels,
-        font_size=10,
-        bbox=dict(
-            facecolor="white",
-            edgecolor="none",
-            alpha=0.9
-        ),
-        rotate=False
-    )
+    # Nodes
+    for node in G.nodes():
 
-    plt.axis("off")
+        churn = package_activity.get(node, 1)
 
-    plt.savefig(
-        "../figure.png",
-        bbox_inches="tight",
-        dpi=300
-    )
+        # Adjusted for better visual differentiation
+        # size = 10 + math.log1p(churn) * 10 #OLD
+        size = 12 + math.log10(churn + 1) * 18
 
+        node_color = churn_color(
+            churn,
+            min_churn,
+            max_churn
+        )
+
+        display_label = node.removeprefix("zeeguu.")
+
+        net.add_node(
+            node,
+            label=display_label,
+            size=size,
+            color=node_color,
+            title=f"""
+            <b>{node}</b><br>
+            Churn: {churn}
+            """
+        )
+
+    # Edges
+    for src, dst, data in G.edges(data=True):
+
+        weight = data.get("weight", 1)
+
+    for src, dst, data in G.edges(data=True):
+
+            weight = data.get("weight", 1)
+
+            edge_kwargs = {
+                "value": weight,
+                "width": max(1, math.log1p(weight) * 2),
+                "label": str(weight),
+                "title": f"Weight: {weight}",
+            }
+
+            # Only add arrows for directed graphs
+            if directed:
+                edge_kwargs["arrows"] = "to"
+
+            net.add_edge(
+                src,
+                dst,
+                **edge_kwargs
+            )
+
+    net.show_buttons(filter_=['physics'])
+
+    html = net.generate_html()
+
+    legend_html = f"""
+    <div style="
+    position: fixed;
+    bottom: 20px;
+    left: 20px;
+    width: 280px;
+    background-color: white;
+    padding: 12px;
+    border: 1px solid #999;
+    border-radius: 8px;
+    z-index: 9999;
+    font-family: Arial;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.15);
+    ">
+
+    <h4 style="margin:0 0 10px 0; color:black;">
+    Churn - no. of commits (log scale)
+    </h4>
+
+    <div style="
+    height: 24px;
+    background: linear-gradient(
+    to right,
+    {legend_colors[0]},
+    {legend_colors[1]},
+    {legend_colors[2]},
+    {legend_colors[3]},
+    {legend_colors[4]}
+    );
+    border:1px solid black;
+    border-radius:4px;
+    "></div>
+
+    <div style="
+    display:flex;
+    justify-content:space-between;
+    font-size:12px;
+    margin-top:6px;
+    color:black;
+    ">
+    <span>1</span>
+    <span>10</span>
+    <span>100</span>
+    <span>1000</span>
+    <span>{int(max_churn)}</span>
+    </div>
+
+    </div>
+    """
+
+    html = html.replace("</body>", legend_html + "</body>")
+
+    with open(output_file, "w", encoding="utf-8") as f:
+        f.write(html)
+
+    print(f"Saved graph to {output_file}")
+
+    
 def relevant_module(module_name):
 
     # Due to `from . import api, db_session` in api/zeegu/api/endpoints/reading_sessions.py
@@ -234,6 +366,7 @@ def dependencies_digraph(code_root_folder):
 
             for target_module in targets:
 
+                target_module = normalize_module_name(target_module)
                 if relevant_module(target_module):
 
                     if G.has_edge(source_module, target_module):
@@ -248,36 +381,99 @@ def dependencies_digraph(code_root_folder):
     return G
 
 def top_level_package(module_name, depth=1):
+
     components = module_name.split(".")
+
+    # Ignore modules that are too shallow
+    if len(components) < depth:
+        return None
+
     return ".".join(components[:depth])
 
 def abstracted_to_top_level(G, depth=1):
 
     aG = nx.DiGraph()
 
+    # Add nodes once
+    for node in G.nodes():
 
+        top_node = top_level_package(node, depth)
+
+        if top_node is None:
+            continue
+
+        aG.add_node(top_node)
+
+    # Add edges
     for src, dst, data in G.edges(data=True):
 
         src_top = top_level_package(src, depth)
         dst_top = top_level_package(dst, depth)
 
-        #if src_top == dst_top:
-        #    continue
-        for node in G.nodes():
-            aG.add_node(top_level_package(node, depth))
+        if src_top is None or dst_top is None:
+            continue
+
+        # To avoid reflexive edges for imports within same package
+        if src_top == dst_top:
+            continue
 
         weight = data.get("weight", 1)
 
         if aG.has_edge(src_top, dst_top):
             aG[src_top][dst_top]["weight"] += weight
         else:
-            aG.add_edge(
-                src_top,
-                dst_top,
-                weight=weight
-            )
+            aG.add_edge(src_top, dst_top, weight=weight)
 
     return aG
+
+def logical_dependencies_graph(commits, depth=2):
+
+    G = nx.Graph()
+
+    for commit in commits:
+
+        try:
+            modifications = commit.modified_files
+        except Exception as e:
+            print(f"Skipping commit {commit.hash}: {e}")
+            continue
+
+        changed_modules = set()
+
+        for modification in modifications:
+
+            path = modification.new_path or modification.old_path
+
+            if path is None:
+                continue
+
+            if ".py" not in path:
+                continue
+
+            module_name = module_name_from_rel_path(path)
+
+            if not relevant_module(module_name):
+                continue
+
+            abstracted_module = top_level_package(
+                module_name,
+                depth
+            )
+
+            if abstracted_module is None:
+                continue
+
+            changed_modules.add(abstracted_module)
+
+        # Create edges between all modules changed together
+        for mod1, mod2 in combinations(sorted(changed_modules), 2):
+
+            if G.has_edge(mod1, mod2):
+                G[mod1][mod2]["weight"] += 1
+            else:
+                G.add_edge(mod1, mod2, weight=1)
+
+    return G
 
 def main():
     # print(sys.version)
@@ -313,7 +509,14 @@ def main():
     commit_counts = {}
 
     for commit in all_commits:
-        for modification in commit.modified_files:
+
+        try:
+            modifications = commit.modified_files
+        except Exception as e:
+            print(f"Skipping commit {commit.hash}: {e}")
+            continue
+
+        for modification in modifications:
 
             new_path = modification.new_path
             old_path = modification.old_path
@@ -348,35 +551,44 @@ def main():
     assert ("zeeguu.api") == module_name_from_rel_path("zeeguu/api/__init__.py")
 
     package_activity = defaultdict(int)
+    print("package activity: ", package_activity)
 
     for path, count in commit_counts.items():
         if ".py" in str(path):
             l2_module = top_level_package(module_name_from_rel_path(path), 2)
+            if l2_module is None:
+                continue
             package_activity[l2_module] += count
 
     sorted_sizes = sorted(package_activity.items(), key=lambda x: x[1], reverse=True)
     #print(sorted_sizes)
 
+
+    depth = 3
+
     # run it
     DG = dependencies_digraph(CODE_ROOT_FOLDER)
-    ADG = abstracted_to_top_level(DG, 2)
+    ADG = abstracted_to_top_level(DG, depth=depth)
     #print("No. of edges: " + str(ADG.number_of_edges()))
     #print("No. of out degrees: " + str(ADG.out_degree()))
     #print("No. of out edges: " + str(ADG.out_edges()))
     #print(ADG.number_of_nodes())
 
-    print(list(ADG.nodes()))
 
     sizes = [
         package_activity.get(node, 1)
         for node in ADG.nodes()
     ]
 
-    print(sizes)
-
-    draw_graph(ADG, (20, 20), sizes)
+    draw_graph_pyvis(ADG, package_activity, output_file="dependencies"+str(depth)+".html", directed=True)
 
     #assert (top_level_package("zeeguu.core.model.util", 1) == "zeeguu")
     #assert (top_level_package("zeeguu.core.model.util", 2) == "zeeguu.core")
+
+
+    # Logical dependencies graph - modules that tend to change together
+    LDG = logical_dependencies_graph(all_commits, depth=depth)
+
+    draw_graph_pyvis(LDG, package_activity, output_file="logical_dependencies"+str(depth)+".html", directed=False)
 
 main()
